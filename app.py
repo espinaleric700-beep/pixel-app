@@ -33,14 +33,12 @@ def subir_a_google_drive(file_bytes, nombre_archivo, mime_type="image/png"):
     Sube un archivo a Google Drive usando las credenciales de la Cuenta de Servicio.
     """
     try:
-        # Carga las credenciales desde los secrets de Streamlit (formato JSON de Service Account)
         creds_dict = st.secrets["gserviceaccount"]
         scopes = ["https://www.googleapis.com/auth/drive"]
         
         creds = Credentials.from_service_account_info(creds_dict, scopes=scopes)
         service = build('drive', 'v3', credentials=creds)
 
-        # ID de la carpeta compartida en Google Drive (Opcional pero recomendado)
         folder_id = st.secrets.get("gdrive_folder_id", None)
         
         file_metadata = {'name': nombre_archivo}
@@ -57,7 +55,7 @@ def subir_a_google_drive(file_bytes, nombre_archivo, mime_type="image/png"):
 
         return file.get('webViewLink')
     except Exception as e:
-        st.error(f"Error subiendo archivo a Google Drive: {e}")
+        st.error(f"Error en Google Drive API: {e}")
         return None
 
 # --- CONVERTIR LOGO A BASE64 PARA EL FONDO ---
@@ -140,7 +138,6 @@ def cargar_datos_supabase():
     if not supabase:
         return None, None
     try:
-        # Cargar clientes
         res_clientes = supabase.table("clientes_registrados").select("*").execute()
         clientes_dict = {}
         if res_clientes.data:
@@ -152,7 +149,6 @@ def cargar_datos_supabase():
                     "avatar_nombre": row.get("avatar_nombre")
                 }
 
-        # Cargar logos
         res_logos = supabase.table("logos").select("*").execute()
         logos_list = []
         if res_logos.data:
@@ -243,10 +239,6 @@ if "logos" not in st.session_state:
 if "recibos_pago" not in st.session_state:
     st.session_state.recibos_pago = {}
 
-if "form_enviado" not in st.session_state:
-    st.session_state.form_enviado = False
-
-# Control de sesión segura
 if "sesion_activa" not in st.session_state:
     st.session_state.sesion_activa = None  
 
@@ -460,58 +452,68 @@ else:
     
     logos_cliente = [l for l in st.session_state.logos if l.get('cliente') == nombre_cliente and l.get('estado') != "Archivado/Pagado"]
     
-    # --- FORMULARIO CORREGIDO PARA ENVÍO DE LOGO ---
+    # --- FORMULARIO OPTIMIZADO DENTRO DEL POPOVER ---
     with st.popover("➕ Enviar Nuevo Logo", use_container_width=True):
-        with st.form(key=f"form_nuevo_logo_{nombre_cliente}", clear_on_submit=True):
-            nombre_logo = st.text_input("Nombre del Logo / Diseño", key=f"inp_nom_{nombre_cliente}")
-            archivos_subidos = st.file_uploader("Sube tus archivos originales", type=["png", "jpg", "jpeg", "ai", "pdf"], accept_multiple_files=True)
-            tipo_aplicacion = st.radio("Soporte del bordado:", ["Tela (Camisetas, Polos, etc.)", "Gorra"])
-            
-            ubicacion_gorra, detalle_gorra = "N/A", "N/A"
-            if tipo_aplicacion == "Gorra":
-                ubicacion_gorra = st.radio("Ubicación:", ["Frontal", "Trasero", "Lateral"])
-                detalle_gorra = st.radio("Estilo:", ["3D (Puff)", "Plano (Flat)"]) if ubicacion_gorra == "Frontal" else "Plano (Flat)"
-            
-            comentario_cliente = st.text_area("Instrucciones especiales")
-            
-            # Botón oficial de envío del formulario
-            btn_enviar = st.form_submit_button("Enviar Logo a Pixel Thread")
+        st.write("### Cargar Nuevo Diseño")
+        nombre_logo = st.text_input("Nombre del Logo / Diseño", key=f"inp_nom_{nombre_cliente}")
+        archivos_subidos = st.file_uploader("Sube tus archivos originales", type=["png", "jpg", "jpeg", "ai", "pdf"], accept_multiple_files=True, key=f"file_upl_{nombre_cliente}")
+        tipo_aplicacion = st.radio("Soporte del bordado:", ["Tela (Camisetas, Polos, etc.)", "Gorra"], key=f"tipo_app_{nombre_cliente}")
+        
+        ubicacion_gorra, detalle_gorra = "N/A", "N/A"
+        if tipo_aplicacion == "Gorra":
+            ubicacion_gorra = st.radio("Ubicación:", ["Frontal", "Trasero", "Lateral"], key=f"ubic_g_{nombre_cliente}")
+            detalle_gorra = st.radio("Estilo:", ["3D (Puff)", "Plano (Flat)"], key=f"det_g_{nombre_cliente}") if ubicacion_gorra == "Frontal" else "Plano (Flat)"
+        
+        comentario_cliente = st.text_area("Instrucciones especiales", key=f"com_cli_{nombre_cliente}")
+        
+        btn_enviar = st.button("🚀 Enviar Logo a Pixel Thread", key=f"btn_send_{nombre_cliente}")
 
         if btn_enviar:
-            if nombre_logo:
-                with st.spinner("Subiendo logo y procesando archivo... por favor espera unos segundos..."):
-                    img_bytes_guardar = archivos_subidos[0].getvalue() if archivos_subidos else None
-                    url_gdrive = None
-
-                    # --- SUBIR A GOOGLE DRIVE SI HAY ARCHIVO ---
-                    if img_bytes_guardar and archivos_subidos:
-                        tipo_mime = archivos_subidos[0].type or "application/octet-stream"
-                        url_gdrive = subir_a_google_drive(
-                            img_bytes_guardar, 
-                            f"{nombre_cliente}_{nombre_logo}_{archivos_subidos[0].name}", 
-                            mime_type=tipo_mime
-                        )
-
-                    nuevo_logo = {
-                        "id": int(datetime.now().timestamp()),
-                        "cliente": nombre_cliente,
-                        "nombre": nombre_logo,
-                        "precio_usd": 5.0,
-                        "precio_dop": 300.0,
-                        "estado": "Pendiente",
-                        "pago": "Pendiente",
-                        "tipo": tipo_aplicacion,
-                        "ubicacion_gorra": ubicacion_gorra,
-                        "detalle_gorra": detalle_gorra,
-                        "comentario": comentario_cliente if comentario_cliente else "Ninguno",
-                        "archivo": archivos_subidos[0].name if archivos_subidos else "Sin archivo",
-                        "imagen_bytes": img_bytes_guardar,
-                        "gdrive_url": url_gdrive
-                    }
-                    st.session_state.logos.append(nuevo_logo)
-                    guardar_logo_supabase(nuevo_logo)
-                    
-                st.success("¡Logo enviado y guardado correctamente!")
-                st.rerun()
+            if not nombre_logo:
+                st.error("❌ Por favor, ingresa un nombre para el logo antes de enviar.")
             else:
-                st.error("Por favor, ingresa un nombre para el logo.")
+                with st.spinner("⏳ Subiendo logo y procesando archivo... Por favor espera unos segundos..."):
+                    try:
+                        img_bytes_guardar = None
+                        nombre_archivo_orig = "Sin archivo"
+                        url_gdrive = None
+
+                        if archivos_subidos and len(archivos_subidos) > 0:
+                            archivo_ppal = archivos_subidos[0]
+                            img_bytes_guardar = archivo_ppal.getvalue()
+                            nombre_archivo_orig = archivo_ppal.name
+                            tipo_mime = archivo_ppal.type or "application/octet-stream"
+
+                            # Subida a Google Drive
+                            url_gdrive = subir_a_google_drive(
+                                img_bytes_guardar, 
+                                f"{nombre_cliente}_{nombre_logo}_{nombre_archivo_orig}", 
+                                mime_type=tipo_mime
+                            )
+
+                        nuevo_logo = {
+                            "id": int(datetime.now().timestamp()),
+                            "cliente": nombre_cliente,
+                            "nombre": nombre_logo,
+                            "precio_usd": 5.0,
+                            "precio_dop": 300.0,
+                            "estado": "Pendiente",
+                            "pago": "Pendiente",
+                            "tipo": tipo_aplicacion,
+                            "ubicacion_gorra": ubicacion_gorra,
+                            "detalle_gorra": detalle_gorra,
+                            "comentario": comentario_cliente if comentario_cliente else "Ninguno",
+                            "archivo": nombre_archivo_orig,
+                            "imagen_bytes": img_bytes_guardar,
+                            "gdrive_url": url_gdrive
+                        }
+
+                        # Guardar en memoria y Supabase
+                        st.session_state.logos.append(nuevo_logo)
+                        guardar_logo_supabase(nuevo_logo)
+
+                        st.success("🎉 ¡Logo subido con éxito!")
+                        st.rerun()
+
+                    except Exception as err:
+                        st.error(f"⚠️ Ocurrió un detalle al guardar: {err}")
