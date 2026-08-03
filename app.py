@@ -52,7 +52,7 @@ def subir_a_google_drive(file_bytes, nombre_archivo, mime_type="image/png"):
 
         return file.get('webViewLink')
     except Exception as e:
-        st.error(f"⚠️ Error subiendo a Google Drive: {e}")
+        st.error(f"⚠️ Error al subir a Google Drive: {e}")
         return None
 
 # --- CONVERTIR LOGO A BASE64 PARA EL FONDO ---
@@ -101,13 +101,6 @@ st.markdown(f"""
         border-radius: 12px;
         box-shadow: 0 0 15px rgba(0, 255, 204, 0.05);
     }}
-    div[data-testid="stMetric"] label {{
-        color: #94a3b8 !important;
-    }}
-    div[data-testid="stMetric"] div[data-testid="stMetricValue"] {{
-        color: #00ffcc !important;
-        text-shadow: 0 0 10px rgba(0, 255, 204, 0.4);
-    }}
 
     .stButton>button {{
         background: linear-gradient(90deg, #00ffcc 0%, #0077ff 100%);
@@ -150,7 +143,13 @@ def cargar_datos_supabase():
         logos_list = []
         if res_logos.data:
             for row in res_logos.data:
-                img_bytes = base64.b64decode(row["imagen_bytes"].encode("utf-8")) if row.get("imagen_bytes") else None
+                img_bytes = None
+                if row.get("imagen_bytes"):
+                    try:
+                        img_bytes = base64.b64decode(row["imagen_bytes"].encode("utf-8"))
+                    except Exception:
+                        img_bytes = None
+
                 logos_list.append({
                     "id": row["id"],
                     "cliente": row.get("cliente"),
@@ -171,7 +170,7 @@ def cargar_datos_supabase():
         
         return clientes_dict, logos_list
     except Exception as e:
-        st.error(f"Error conectando con Supabase: {e}")
+        st.error(f"Error cargando desde Supabase: {e}")
         return None, None
 
 def guardar_cliente_supabase(nombre, divisa, avatar_bytes=None, avatar_nombre=None):
@@ -194,53 +193,48 @@ def eliminar_cliente_supabase(nombre):
 def guardar_logo_supabase(logo_dict):
     if not supabase:
         return
-    logo_db = logo_dict.copy()
-    if logo_db.get("imagen_bytes"):
-        logo_db["imagen_bytes"] = base64.b64encode(logo_db["imagen_bytes"]).decode("utf-8")
+    # Preparamos una copia serializable limpia para Supabase
+    logo_db = {
+        "id": logo_dict["id"],
+        "cliente": logo_dict.get("cliente"),
+        "nombre": logo_dict.get("nombre"),
+        "precio_usd": logo_dict.get("precio_usd", 5.0),
+        "precio_dop": logo_dict.get("precio_dop", 300.0),
+        "estado": logo_dict.get("estado", "Pendiente"),
+        "pago": logo_dict.get("pago", "Pendiente"),
+        "tipo": logo_dict.get("tipo", "Tela"),
+        "ubicacion_gorra": logo_dict.get("ubicacion_gorra", "N/A"),
+        "detalle_gorra": logo_dict.get("detalle_gorra", "N/A"),
+        "comentario": logo_dict.get("comentario", "Ninguno"),
+        "archivo": logo_dict.get("archivo", "Sin archivo"),
+        "gdrive_url": logo_dict.get("gdrive_url")
+    }
     
-    if "imagen_obj" in logo_db:
-        del logo_db["imagen_obj"]
+    # Convertir bytes a base64 string seguro para JSON/Supabase
+    if logo_dict.get("imagen_bytes"):
+        logo_db["imagen_bytes"] = base64.b64encode(logo_dict["imagen_bytes"]).decode("utf-8")
+    else:
+        logo_db["imagen_bytes"] = None
 
     supabase.table("logos").upsert(logo_db).execute()
 
-def eliminar_logo_supabase(logo_id):
-    if not supabase:
-        return
-    supabase.table("logos").delete().eq("id", logo_id).execute()
-
-# --- BANDERAS DE ESTADO DE SESIÓN ---
-if "procesando_subida" not in st.session_state:
-    st.session_state.procesando_subida = False
-
+# --- BANDERAS Y ESTADO DE SESIÓN ---
 if "sesion_activa" not in st.session_state:
     st.session_state.sesion_activa = None  
 
-# Autorefresh solo activo cuando NO estemos subiendo un archivo
-if not st.session_state.procesando_subida:
-    st_autorefresh(interval=3000, limit=None, key="autorefresh_global")
+# Cargar datos iniciales
+if "clientes_registrados" not in st.session_state or "logos" not in st.session_state:
+    clientes_db, logos_db = cargar_datos_supabase()
+    st.session_state.clientes_registrados = clientes_db if clientes_db is not None else {
+        "Cliente A": {"divisa": "Dólares (USD - $)", "avatar_bytes": None, "avatar_nombre": None},
+        "Cliente B": {"divisa": "Pesos Dominicanos (DOP - RD$)", "avatar_bytes": None, "avatar_nombre": None}
+    }
+    st.session_state.logos = logos_db if logos_db is not None else []
 
-# --- CARGAR DATOS DESDE SUPABASE AL INICIAR LA SESIÓN ---
-clientes_db, logos_db = cargar_datos_supabase()
+# Autorefresh global
+st_autorefresh(interval=5000, limit=None, key="autorefresh_global")
 
-if "clientes_registrados" not in st.session_state:
-    if clientes_db:
-        st.session_state.clientes_registrados = clientes_db
-    else:
-        st.session_state.clientes_registrados = {
-            "Cliente A": {"divisa": "Dólares (USD - $)", "avatar_bytes": None, "avatar_nombre": None},
-            "Cliente B": {"divisa": "Pesos Dominicanos (DOP - RD$)", "avatar_bytes": None, "avatar_nombre": None}
-        }
-
-if "logos" not in st.session_state:
-    if logos_db:
-        st.session_state.logos = logos_db
-    else:
-        st.session_state.logos = []
-
-if "recibos_pago" not in st.session_state:
-    st.session_state.recibos_pago = {}
-
-# --- MENÚ DE NAVEGACIÓN Y AUTENTICACIÓN LATERAL ---
+# --- MENÚ LATERAL ---
 st.sidebar.title("Pixel Thread 🧵")
 
 if st.session_state.sesion_activa is None:
@@ -264,10 +258,7 @@ if st.session_state.sesion_activa is None:
                 st.success(f"¡Bienvenido, {usuario_ingresado}!")
                 st.rerun()
             else:
-                st.error("Usuario no encontrado o no autorizado. Solicítalo al administrador.")
-    
-    st.sidebar.divider()
-    st.sidebar.info("💡 Tarifa oficial: $5.00 USD / $300.00 DOP por logo digitalizado.")
+                st.error("Usuario no encontrado.")
     st.stop()
 
 else:
@@ -276,212 +267,86 @@ else:
         st.rerun()
     
     st.sidebar.divider()
-    if st.session_state.sesion_activa == "admin":
-        st.sidebar.success("🔑 Sesión Activa: Administrador")
-    else:
-        st.sidebar.success(f"👤 Sesión Activa: {st.session_state.sesion_activa}")
-    
-    st.sidebar.divider()
-    st.sidebar.info("💡 Tarifa oficial: $5.00 USD / $300.00 DOP por logo digitalizado.")
-    st.sidebar.caption("🔄 Actualización automática, Supabase y Drive activos")
+    st.sidebar.success(f"👤 Sesión: {st.session_state.sesion_activa}")
 
 # ==========================================
 # 1. VISTA ADMINISTRADOR
 # ==========================================
 if st.session_state.sesion_activa == "admin":
     st.title("🎛️ Panel de Control - Pixel Thread")
-    st.write("Administra el flujo de trabajo industrial, el estado de pagos y la entrega de archivos de bordado (.DST/.EMB/.PDF).")
-
-    total_usd = sum(l.get('precio_usd', 5.0) for l in st.session_state.logos if l.get('estado', 'Pendiente') == "Terminado" and l.get('estado') != "Archivado/Pagado")
-    total_dop = sum(l.get('precio_dop', 300.0) for l in st.session_state.logos if l.get('estado', 'Pendiente') == "Terminado" and l.get('estado') != "Archivado/Pagado")
+    
+    total_usd = sum(l.get('precio_usd', 5.0) for l in st.session_state.logos if l.get('estado') == "Terminado")
+    total_dop = sum(l.get('precio_dop', 300.0) for l in st.session_state.logos if l.get('estado') == "Terminado")
     
     col1, col2 = st.columns(2)
-    col1.metric("Total Acumulado (Semana)", f"${total_usd:.2f} USD")
-    col2.metric("Total Acumulado (Semana)", f"RD$ {total_dop:,.2f}")
+    col1.metric("Acumulado (USD)", f"${total_usd:.2f} USD")
+    col2.metric("Acumulado (DOP)", f"RD$ {total_dop:,.2f}")
 
     st.divider()
 
-    with st.expander("➕ Registrar Nuevo Cliente, Control y Recibos"):
-        st.subheader("➕ Registrar Nuevo Cliente y su Divisa")
-        with st.form(key="form_nuevo_cliente"):
-            col_nc1, col_nc2 = st.columns(2)
-            with col_nc1:
-                nuevo_nombre_cli = st.text_input("Nombre de Usuario del Cliente (Ej. Cliente C)")
-                nueva_divisa_cli = st.selectbox("Moneda Principal / Divisa", ["Dólares (USD - $)", "Pesos Dominicanos (DOP - RD$)"])
-            with col_nc2:
-                avatar_nuevo_file = st.file_uploader("Logo / Avatar del Cliente (Opcional)", type=["png", "jpg", "jpeg"])
-            
-            btn_crear_cli = st.form_submit_button("Registrar Cliente")
-            if btn_crear_cli:
-                if nuevo_nombre_cli:
-                    if nuevo_nombre_cli in st.session_state.clientes_registrados:
-                        st.error("¡Este cliente ya está registrado!")
+    st.subheader("📋 Pedidos Recibidos")
+    if not st.session_state.logos:
+        st.info("No hay órdenes registradas.")
+    else:
+        for idx, logo in enumerate(st.session_state.logos, 1):
+            with st.expander(f"Orden #{idx} - {logo.get('nombre')} ({logo.get('cliente')}) - {logo.get('estado')}", expanded=True):
+                col_img, col_det = st.columns([1, 3])
+                with col_img:
+                    if logo.get('imagen_bytes'):
+                        try:
+                            st.image(Image.open(io.BytesIO(logo['imagen_bytes'])), width=120)
+                        except Exception:
+                            st.caption("📷 Imagen cargada")
                     else:
-                        avatar_bytes_val = avatar_nuevo_file.getvalue() if avatar_nuevo_file else None
-                        avatar_nombre_val = avatar_nuevo_file.name if avatar_nuevo_file else None
-
-                        st.session_state.clientes_registrados[nuevo_nombre_cli] = {
-                            "divisa": nueva_divisa_cli,
-                            "avatar_bytes": avatar_bytes_val,
-                            "avatar_nombre": avatar_nombre_val
-                        }
-                        guardar_cliente_supabase(nuevo_nombre_cli, nueva_divisa_cli, avatar_bytes_val, avatar_nombre_val)
-                        st.success(f"¡Cliente '{nuevo_nombre_cli}' agregado con éxito en Supabase!")
-                        st.rerun()
-                else:
-                    st.error("Por favor, ingresa un nombre para el cliente.")
-
-        st.divider()
-
-        st.subheader("👥 Control, Cierre de Ciclo y Gestión de Clientes")
-        for cli in list(st.session_state.clientes_registrados.keys()):
-            logos_cli_term = [l for l in st.session_state.logos if l.get('cliente') == cli and l.get('estado', 'Pendiente') == "Terminado"]
-            sub_usd = sum(l.get('precio_usd', 5.0) for l in logos_cli_term)
-            sub_dop = sum(l.get('precio_dop', 300.0) for l in logos_cli_term)
-            
-            with st.expander(f"👤 Cliente: {cli} — Acumulado Terminado: ${sub_usd:.2f} USD / RD$ {sub_dop:,.2f}"):
-                c_info, c_btn_reset, c_btn_del = st.columns([2, 1, 1])
-                with c_info:
-                    st.write(f"Trabajos terminados pendientes de cerrar ciclo: **{len(logos_cli_term)}**")
-                with c_btn_reset:
-                    if st.button(f"🔄 Reiniciar Ciclo", key=f"reset_cli_{cli}"):
-                        for logo in st.session_state.logos:
-                            if logo.get('cliente') == cli and logo.get('estado', 'Pendiente') == "Terminado":
-                                logo['pago'] = "Pagado"
-                                logo['estado'] = "Archivado/Pagado"
-                                guardar_logo_supabase(logo)
-                        st.success(f"¡Ciclo de {cli} reiniciado!")
-                        st.rerun()
-                with c_btn_del:
-                    if st.button(f"🗑️ Eliminar Usuario", key=f"del_cli_{cli}"):
-                        del st.session_state.clientes_registrados[cli]
-                        if cli in st.session_state.recibos_pago:
-                            del st.session_state.recibos_pago[cli]
-                        st.session_state.logos = [l for l in st.session_state.logos if l.get('cliente') != cli]
-                        eliminar_cliente_supabase(cli)
-                        st.warning(f"¡Usuario '{cli}' eliminado de Supabase!")
-                        st.rerun()
-
-    st.divider()
-
-    logos_activos_admin = [l for l in st.session_state.logos if l.get('estado') != "Archivado/Pagado"]
-    logos_por_hacer = [l for l in logos_activos_admin if l.get('estado', 'Pendiente') != "Terminado"]
-    logos_terminados = [l for l in logos_activos_admin if l.get('estado', 'Pendiente') == "Terminado"]
-
-    st.subheader("📋 Gestión de Trabajos Activos")
-    if not logos_por_hacer:
-        st.info("No hay trabajos activos pendientes o en proceso.")
-
-    for idx_cola, logo in enumerate(logos_por_hacer, 1):
-        i = st.session_state.logos.index(logo)
-        with st.container():
-            col_img, col_info = st.columns([1, 3])
-            with col_img:
-                if logo.get('imagen_bytes'):
-                    try:
-                        st.image(Image.open(io.BytesIO(logo['imagen_bytes'])), caption="Diseño", width=100)
-                    except:
-                        st.info("Sin miniatura")
-                else:
-                    st.info("Sin miniatura")
-
-            with col_info:
-                st.markdown(f"### 🔢 Cola #{idx_cola} - 🧵 {logo.get('nombre')} *({logo.get('cliente')})*")
-                st.write(f"**Tipo:** {logo.get('tipo')} | **Ubicación:** {logo.get('ubicacion_gorra')} | **Estilo:** {logo.get('detalle_gorra')}")
-                st.write(f"**Comentario:** {logo.get('comentario')}")
-                st.write(f"**Precio:** ${logo.get('precio_usd', 5.0):.2f} USD")
-                if logo.get('gdrive_url'):
-                    st.markdown(f"[📁 Ver enlace en Google Drive]({logo.get('gdrive_url')})")
-            
-            estado_actual = logo.get('estado', 'Pendiente')
-            c1, c2, c3 = st.columns(3)
-            
-            if estado_actual == "Pendiente":
-                if c1.button("🔍 Pasar a Revisión", key=f"rev_{logo['id']}"):
-                    st.session_state.logos[i]['estado'] = "En Revisión"
-                    guardar_logo_supabase(st.session_state.logos[i])
-                    st.rerun()
-            elif estado_actual == "En Revisión":
-                if c2.button("▶ Iniciar (Luz Verde)", key=f"iniciar_{logo['id']}"):
-                    st.session_state.logos[i]['estado'] = "En Progreso"
-                    guardar_logo_supabase(st.session_state.logos[i])
-                    st.rerun()
-            elif estado_actual == "En Progreso":
-                if c2.button("✓ Marcar Terminado", key=f"terminar_{logo['id']}"):
-                    st.session_state.logos[i]['estado'] = "Terminado"
-                    guardar_logo_supabase(st.session_state.logos[i])
-                    st.rerun()
-        st.divider()
-
-    st.subheader("✅ Trabajos Ya Realizados")
-    for logo in logos_terminados:
-        i = st.session_state.logos.index(logo)
-        st.markdown(f"**🧵 {logo.get('nombre')}** - Cliente: {logo.get('cliente')}")
-        pago_actual = logo.get('pago', 'Pendiente')
-        nuevo_pago = st.selectbox("Estado de Pago", ["Pendiente", "Pagado"], index=0 if pago_actual=="Pendiente" else 1, key=f"pago_{logo['id']}")
-        if nuevo_pago != pago_actual:
-            st.session_state.logos[i]['pago'] = nuevo_pago
-            guardar_logo_supabase(st.session_state.logos[i])
-            st.rerun()
-        st.divider()
+                        st.caption("Sin imagen")
+                with col_det:
+                    st.write(f"**Cliente:** {logo.get('cliente')}")
+                    st.write(f"**Soporte:** {logo.get('tipo')} | **Ubicación:** {logo.get('ubicacion_gorra')}")
+                    st.write(f"**Instrucciones:** {logo.get('comentario')}")
+                    if logo.get('gdrive_url'):
+                        st.markdown(f"[📁 Abrir Archivo en Google Drive]({logo.get('gdrive_url')})")
 
 # ==========================================
-# 2. VISTA PORTAL DE CLIENTES
+# 2. VISTA PORTAL CLIENTE
 # ==========================================
 else:
     nombre_cliente = st.session_state.sesion_activa
-    info_cliente = st.session_state.clientes_registrados.get(nombre_cliente, {"divisa": "Dólares (USD - $)", "avatar_bytes": None})
-    divisa_default = info_cliente.get("divisa", "Dólares (USD - $)") if isinstance(info_cliente, dict) else info_cliente
-    avatar_bytes = info_cliente.get("avatar_bytes", None) if isinstance(info_cliente, dict) else None
+    st.title(f"Portal de Cliente: {nombre_cliente}")
 
-    col_av, col_tit = st.columns([1, 12])
-    with col_av:
-        if avatar_bytes:
-            try:
-                st.image(Image.open(io.BytesIO(avatar_bytes)), width=55)
-            except:
-                st.markdown("👤")
+    # --- FORMULARIO FIJO DE NAVEGACIÓN ---
+    st.subheader("📤 Enviar Nuevo Logo a Digitalizar")
+    
+    with st.form(key=f"form_envio_logo_{nombre_cliente}", clear_on_submit=True):
+        nombre_logo = st.text_input("Nombre del Logo / Diseño *")
+        archivos_subidos = st.file_uploader("Sube tu archivo (PNG, JPG, PDF, AI)", type=["png", "jpg", "jpeg", "ai", "pdf"], accept_multiple_files=False)
+        tipo_aplicacion = st.radio("Soporte del bordado:", ["Tela (Camisetas, Polos, etc.)", "Gorra"])
+        
+        ubicacion_gorra = "N/A"
+        detalle_gorra = "N/A"
+        if tipo_aplicacion == "Gorra":
+            ubicacion_gorra = st.radio("Ubicación:", ["Frontal", "Trasero", "Lateral"])
+            detalle_gorra = st.radio("Estilo:", ["3D (Puff)", "Plano (Flat)"]) if ubicacion_gorra == "Frontal" else "Plano (Flat)"
+        
+        comentario_cliente = st.text_area("Instrucciones especiales")
+        
+        btn_enviar = st.form_submit_button("🚀 ENVIAR LOGO A PIXEL THREAD")
+
+    if btn_enviar:
+        if not nombre_logo.strip():
+            st.error("❌ Por favor escribe el nombre del logo.")
         else:
-            st.markdown("👤")
-    with col_tit:
-        st.title(f"Portal de Cliente: {nombre_cliente}")
-
-    divisa = st.radio("Selecciona tu moneda:", ["Dólares (USD - $)", "Pesos Dominicanos (DOP - RD$)"], index=0 if "Dólares" in divisa_default else 1, horizontal=True)
-
-    # --- FORMULARIO DIRECTO (EXPANDER) ANTI-BLOQUEO ---
-    with st.expander("➕ **HAZ CLIC AQUÍ PARA SUBIR Y ENVIAR UN NUEVO LOGO**", expanded=True):
-        with st.form(key=f"form_directo_{nombre_cliente}", clear_on_submit=True):
-            nombre_logo = st.text_input("Nombre del Logo / Diseño")
-            archivos_subidos = st.file_uploader("Sube tus archivos originales", type=["png", "jpg", "jpeg", "ai", "pdf"], accept_multiple_files=True)
-            tipo_aplicacion = st.radio("Soporte del bordado:", ["Tela (Camisetas, Polos, etc.)", "Gorra"])
-            
-            ubicacion_gorra = "N/A"
-            detalle_gorra = "N/A"
-            if tipo_aplicacion == "Gorra":
-                ubicacion_gorra = st.radio("Ubicación:", ["Frontal", "Trasero", "Lateral"])
-                detalle_gorra = st.radio("Estilo:", ["3D (Puff)", "Plano (Flat)"]) if ubicacion_gorra == "Frontal" else "Plano (Flat)"
-            
-            comentario_cliente = st.text_area("Instrucciones especiales")
-            
-            btn_enviar = st.form_submit_button("🚀 ENVIAR LOGO A PIXEL THREAD")
-
-        if btn_enviar:
-            if not nombre_logo:
-                st.error("❌ Por favor escribe un nombre para el logo.")
-            else:
-                st.session_state.procesando_subida = True
-                with st.spinner("⏳ Guardando logo y subiendo archivo a Google Drive y Supabase... Por favor espera..."):
+            with st.spinner("⏳ Procesando y guardando orden..."):
+                try:
                     img_bytes_guardar = None
                     nombre_archivo_orig = "Sin archivo"
                     url_gdrive = None
 
-                    if archivos_subidos and len(archivos_subidos) > 0:
-                        archivo_ppal = archivos_subidos[0]
-                        img_bytes_guardar = archivo_ppal.getvalue()
-                        nombre_archivo_orig = archivo_ppal.name
-                        tipo_mime = archivo_ppal.type or "application/octet-stream"
+                    if archivos_subidos is not None:
+                        img_bytes_guardar = archivos_subidos.getvalue()
+                        nombre_archivo_orig = archivos_subidos.name
+                        tipo_mime = archivos_subidos.type or "application/octet-stream"
 
-                        # Subir a Google Drive
+                        # 1. Intentar Subir a Google Drive
                         url_gdrive = subir_a_google_drive(
                             img_bytes_guardar, 
                             f"{nombre_cliente}_{nombre_logo}_{nombre_archivo_orig}", 
@@ -505,35 +370,39 @@ else:
                         "gdrive_url": url_gdrive
                     }
 
-                    # Guardar localmente y en Supabase
-                    st.session_state.logos.append(nuevo_logo)
+                    # 2. Guardar en Supabase
                     guardar_logo_supabase(nuevo_logo)
-                    
-                    st.session_state.procesando_subida = False
-                    st.success("🎉 ¡Logo subido con éxito!")
+
+                    # 3. Guardar en estado local de sesión
+                    st.session_state.logos.append(nuevo_logo)
+
+                    st.success("🎉 ¡Logo subido y registrado con éxito!")
                     st.rerun()
+
+                except Exception as e:
+                    st.error(f"❌ Error al procesar la orden: {e}")
 
     st.divider()
 
-    # --- LISTA DE LOGOS DEL CLIENTE ---
-    st.subheader("📋 Mis Pedidos de Digitalización")
-    logos_cliente = [l for l in st.session_state.logos if l.get('cliente') == nombre_cliente and l.get('estado') != "Archivado/Pagado"]
+    # --- HISTORIAL DE PEDIDOS EN EL PORTAL DE CLIENTE ---
+    st.subheader("📋 Mis Pedidos Registrados")
+    mis_logos = [l for l in st.session_state.logos if l.get('cliente') == nombre_cliente]
     
-    if not logos_cliente:
-        st.info("Aún no has enviado logos para digitalizar.")
+    if not mis_logos:
+        st.info("Aún no has enviado ningún logo.")
     else:
-        for l in logos_cliente:
+        for l in mis_logos:
             with st.container():
-                c_a, c_b = st.columns([1, 3])
-                with c_a:
+                col_a, col_b = st.columns([1, 3])
+                with col_a:
                     if l.get('imagen_bytes'):
                         try:
-                            st.image(Image.open(io.BytesIO(l['imagen_bytes'])), width=80)
-                        except:
-                            st.caption("📷 Imagen subida")
+                            st.image(Image.open(io.BytesIO(l['imagen_bytes'])), width=90)
+                        except Exception:
+                            st.caption("🖼️ Imagen subida")
                     else:
                         st.caption("Sin miniatura")
-                with c_b:
+                with col_b:
                     st.markdown(f"**🧵 {l.get('nombre')}** — Estado: `{l.get('estado')}`")
                     st.write(f"Soporte: {l.get('tipo')} | Comentario: {l.get('comentario')}")
                     if l.get('gdrive_url'):
