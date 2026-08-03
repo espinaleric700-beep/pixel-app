@@ -7,10 +7,10 @@ import io
 import base64
 from supabase import create_client, Client
 
-# --- LIBRERÍAS DE GOOGLE DRIVE ---
+# --- LIBRERÍAS DE GOOGLE DRIVE Y CUENTA DE SERVICIO ---
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
-from google.oauth2.credentials import Credentials
+from google.oauth2.service_account import Credentials
 
 st.set_page_config(page_title="Pixel Thread - Portal Profesional", layout="centered")
 
@@ -27,36 +27,35 @@ def init_supabase():
 
 supabase: Client = init_supabase()
 
-# --- FUNCIÓN PARA SUBIR ARCHIVOS A GOOGLE DRIVE ---
+# --- FUNCIÓN PARA SUBIR ARCHIVOS A GOOGLE DRIVE (SERVICE ACCOUNT) ---
 def subir_a_google_drive(file_bytes, nombre_archivo, mime_type="image/png"):
     """
-    Sube un archivo en formato de bytes a Google Drive.
+    Sube un archivo a Google Drive usando las credenciales de la Cuenta de Servicio.
     """
     try:
-        # Cargamos credenciales guardadas en Streamlit Secrets
-        creds_data = {
-            "token": None,
-            "refresh_token": st.secrets["gdrive"]["refresh_token"],
-            "token_uri": "https://oauth2.googleapis.com/token",
-            "client_id": st.secrets["gdrive"]["client_id"],
-            "client_secret": st.secrets["gdrive"]["client_secret"],
-            "scopes": ["https://www.googleapis.com/auth/drive.file"]
-        }
+        # Carga las credenciales desde los secrets de Streamlit (formato JSON de Service Account)
+        creds_dict = st.secrets["gserviceaccount"]
+        scopes = ["https://www.googleapis.com/auth/drive"]
         
-        creds = Credentials.from_authorized_user_info(creds_data)
+        creds = Credentials.from_service_account_info(creds_dict, scopes=scopes)
         service = build('drive', 'v3', credentials=creds)
 
+        # ID de la carpeta compartida en Google Drive (Opcional pero recomendado)
+        folder_id = st.secrets.get("gdrive_folder_id", None)
+        
         file_metadata = {'name': nombre_archivo}
+        if folder_id:
+            file_metadata['parents'] = [folder_id]
+
         media = MediaIoBaseUpload(io.BytesIO(file_bytes), mimetype=mime_type, resumable=True)
 
-        # Se realiza la subida a Google Drive
         file = service.files().create(
             body=file_metadata,
             media_body=media,
             fields='id, webViewLink'
         ).execute()
 
-        return file.get('webViewLink') # Retorna la URL directa del archivo guardado en Drive
+        return file.get('webViewLink')
     except Exception as e:
         st.error(f"Error subiendo archivo a Google Drive: {e}")
         return None
