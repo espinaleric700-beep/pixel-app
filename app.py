@@ -7,6 +7,11 @@ import io
 import base64
 from supabase import create_client, Client
 
+# --- LIBRERÍAS DE GOOGLE DRIVE ---
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaIoBaseUpload
+from google.oauth2.credentials import Credentials
+
 st.set_page_config(page_title="Pixel Thread - Portal Profesional", layout="centered")
 
 # --- CONEXIÓN A SUPABASE ---
@@ -21,6 +26,40 @@ def init_supabase():
         return None
 
 supabase: Client = init_supabase()
+
+# --- FUNCIÓN PARA SUBIR ARCHIVOS A GOOGLE DRIVE ---
+def subir_a_google_drive(file_bytes, nombre_archivo, mime_type="image/png"):
+    """
+    Sube un archivo en formato de bytes a Google Drive.
+    """
+    try:
+        # Cargamos credenciales guardadas en Streamlit Secrets
+        creds_data = {
+            "token": None,
+            "refresh_token": st.secrets["gdrive"]["refresh_token"],
+            "token_uri": "https://oauth2.googleapis.com/token",
+            "client_id": st.secrets["gdrive"]["client_id"],
+            "client_secret": st.secrets["gdrive"]["client_secret"],
+            "scopes": ["https://www.googleapis.com/auth/drive.file"]
+        }
+        
+        creds = Credentials.from_authorized_user_info(creds_data)
+        service = build('drive', 'v3', credentials=creds)
+
+        file_metadata = {'name': nombre_archivo}
+        media = MediaIoBaseUpload(io.BytesIO(file_bytes), mimetype=mime_type, resumable=True)
+
+        # Se realiza la subida a Google Drive
+        file = service.files().create(
+            body=file_metadata,
+            media_body=media,
+            fields='id, webViewLink'
+        ).execute()
+
+        return file.get('webViewLink') # Retorna la URL directa del archivo guardado en Drive
+    except Exception as e:
+        st.error(f"Error subiendo archivo a Google Drive: {e}")
+        return None
 
 # --- CONVERTIR LOGO A BASE64 PARA EL FONDO ---
 logo_path = "PIXEL THREAD W_Mesa de trabajo 1_2.jpg"
@@ -134,7 +173,8 @@ def cargar_datos_supabase():
                     "comentario": row.get("comentario", "Ninguno"),
                     "archivo": row.get("archivo", "Sin archivo"),
                     "imagen_bytes": img_bytes,
-                    "archivos_multiples": row.get("archivos_multiples", [])
+                    "archivos_multiples": row.get("archivos_multiples", []),
+                    "gdrive_url": row.get("gdrive_url")
                 })
         
         return clientes_dict, logos_list
@@ -254,7 +294,7 @@ else:
     
     st.sidebar.divider()
     st.sidebar.info("💡 Tarifa oficial: $5.00 USD / $300.00 DOP por logo digitalizado.")
-    st.sidebar.caption("🔄 Actualización automática y Supabase activos")
+    st.sidebar.caption("🔄 Actualización automática, Supabase y Drive activos")
 
 # ==========================================
 # 1. VISTA ADMINISTRADOR
@@ -361,6 +401,8 @@ if st.session_state.sesion_activa == "admin":
                 st.write(f"**Tipo:** {logo.get('tipo')} | **Ubicación:** {logo.get('ubicacion_gorra')} | **Estilo:** {logo.get('detalle_gorra')}")
                 st.write(f"**Comentario:** {logo.get('comentario')}")
                 st.write(f"**Precio:** ${logo.get('precio_usd', 5.0):.2f} USD")
+                if logo.get('gdrive_url'):
+                    st.markdown(f"[📁 Ver enlace en Google Drive]({logo.get('gdrive_url')})")
             
             estado_actual = logo.get('estado', 'Pendiente')
             c1, c2, c3 = st.columns(3)
@@ -434,6 +476,18 @@ else:
         if st.button("Enviar Logo a Pixel Thread"):
             if nombre_logo:
                 img_bytes_guardar = archivos_subidos[0].getvalue() if archivos_subidos else None
+                url_gdrive = None
+
+                # --- SUBIR A GOOGLE DRIVE SI HAY ARCHIVO ---
+                if img_bytes_guardar and archivos_subidos:
+                    with st.spinner("Subiendo respaldo a Google Drive..."):
+                        tipo_mime = archivos_subidos[0].type or "application/octet-stream"
+                        url_gdrive = subir_a_google_drive(
+                            img_bytes_guardar, 
+                            f"{nombre_cliente}_{nombre_logo}_{archivos_subidos[0].name}", 
+                            mime_type=tipo_mime
+                        )
+
                 nuevo_logo = {
                     "id": int(datetime.now().timestamp()),
                     "cliente": nombre_cliente,
@@ -447,11 +501,16 @@ else:
                     "detalle_gorra": detalle_gorra,
                     "comentario": comentario_cliente if comentario_cliente else "Ninguno",
                     "archivo": archivos_subidos[0].name if archivos_subidos else "Sin archivo",
-                    "imagen_bytes": img_bytes_guardar
+                    "imagen_bytes": img_bytes_guardar,
+                    "gdrive_url": url_gdrive # <--- Guardamos la URL de Google Drive
                 }
                 st.session_state.logos.append(nuevo_logo)
                 guardar_logo_supabase(nuevo_logo)
-                st.success("¡Orden guardada en Supabase con éxito!")
+                
+                if url_gdrive:
+                    st.success(f"¡Orden y respaldo guardados en Google Drive con éxito!")
+                else:
+                    st.success("¡Orden guardada en Supabase con éxito!")
                 st.rerun()
             else:
                 st.error("Ingresa un nombre para el logo.")
