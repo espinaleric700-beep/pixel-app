@@ -1,3 +1,5 @@
 streamlit
+pillow
 streamlit-autorefresh
 supabase
+google-api-python-client
