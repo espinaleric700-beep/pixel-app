@@ -20,8 +20,8 @@ st.set_page_config(
 @st.cache_resource
 def init_firebase():
     if not firebase_admin._apps:
-        # Carga el JSON desde los secretos de Streamlit
-        key_dict = json.loads(st.secrets["FIREBASE_SERVICE_ACCOUNT"])
+        # Cargamos los secretos usando la clave FIREBASE_CREDENTIALS
+        key_dict = json.loads(st.secrets["FIREBASE_CREDENTIALS"])
         cred = credentials.Certificate(key_dict)
         firebase_admin.initialize_app(cred)
     return firestore.client()
@@ -32,11 +32,11 @@ db = init_firebase()
 # 3. FUNCIONES DE BASE DE DATOS
 # ---------------------------------------------------------
 def guardar_logo_firebase(nuevo_logo):
-    # Guardamos en la colección "logos" usando el ID como documento
+    # Guardamos en la colección "logos" usando el timestamp como ID
     db.collection("logos").document(str(nuevo_logo["id"])).set(nuevo_logo)
 
 def obtener_logos_cliente(nombre_cliente):
-    # Consultamos documentos donde el campo "cliente" coincida
+    # Consulta a Firestore filtrando por el campo "cliente"
     docs = db.collection("logos").where("cliente", "==", nombre_cliente).stream()
     return [doc.to_dict() for doc in docs]
 
@@ -110,18 +110,20 @@ with st.expander("➕ Enviar Nuevo Logo", expanded=True):
 # 7. HISTORIAL
 # ---------------------------------------------------------
 st.header("📋 Mis Pedidos Registrados")
-pedidos = obtener_logos_cliente(usuario_activo)
-
-if pedidos:
-    for p in pedidos:
-        with st.container():
-            c1, c2, c3, c4 = st.columns([3, 2, 2, 2])
-            c1.subheader(p.get("nombre", "Sin Nombre"))
-            precio = p.get("precio_usd", 5.0) if "USD" in divisa else p.get("precio_dop", 300.0)
-            moneda = "USD" if "USD" in divisa else "DOP"
-            c2.markdown(f"**Precio:** {precio:.2f} {moneda}")
-            c3.markdown(f"**Estado:** {p.get('estado', 'Pendiente')}")
-            c4.markdown(f"**Pago:** {p.get('pago', 'Pendiente')}")
-            st.divider()
-else:
-    st.info("No tienes solicitudes guardadas en el sistema.")
+try:
+    pedidos = obtener_logos_cliente(usuario_activo)
+    if pedidos:
+        for p in pedidos:
+            with st.container():
+                c1, c2, c3, c4 = st.columns([3, 2, 2, 2])
+                c1.subheader(p.get("nombre", "Sin Nombre"))
+                precio = p.get("precio_usd", 5.0) if "USD" in divisa else p.get("precio_dop", 300.0)
+                moneda = "USD" if "USD" in divisa else "DOP"
+                c2.markdown(f"**Precio:** {precio:.2f} {moneda}")
+                c3.markdown(f"**Estado:** {p.get('estado', 'Pendiente')}")
+                c4.markdown(f"**Pago:** {p.get('pago', 'Pendiente')}")
+                st.divider()
+    else:
+        st.info("No tienes solicitudes guardadas en el sistema.")
+except Exception as e:
+    st.error(f"Error al conectar con Firestore: {e}")
