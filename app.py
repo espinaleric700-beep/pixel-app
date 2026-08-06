@@ -1,74 +1,127 @@
 import streamlit as st
-from PIL import Image
-from streamlit_autorefresh import st_autorefresh
+import firebase_admin
+from firebase_admin import credentials, firestore
+import base64
 from datetime import datetime
 import json
-import os
-import io
-import base64
 
-# ==============================================================================
-# --- INICIALIZACIÓN DE CONEXIÓN (OPCIÓN 2) ---
-# Puedes colocar aquí tus credenciales o clientes de conexión (ej: sqlalchemy, supabase)
-# ==============================================================================
-def inicializar_conexion():
-    """
-    Función para inicializar la conexión a base de datos externa.
-    Si usas credenciales, colócalas en st.secrets para mayor seguridad.
-    """
-    # Ejemplo: st.connection("my_db", type="sql")
-    return True 
+# ---------------------------------------------------------
+# 1. CONFIGURACIÓN DE PÁGINA
+# ---------------------------------------------------------
+st.set_page_config(
+    page_title="Pixel Thread 🧵",
+    page_icon="🧵",
+    layout="wide"
+)
 
-# Llamamos a la inicialización
-conexion_activa = inicializar_conexion()
-# ==============================================================================
+# ---------------------------------------------------------
+# 2. CONEXIÓN A FIREBASE (FIRESTORE)
+# ---------------------------------------------------------
+@st.cache_resource
+def init_firebase():
+    if not firebase_admin._apps:
+        # Carga el JSON desde los secretos de Streamlit
+        key_dict = json.loads(st.secrets["FIREBASE_SERVICE_ACCOUNT"])
+        cred = credentials.Certificate(key_dict)
+        firebase_admin.initialize_app(cred)
+    return firestore.client()
 
-st.set_page_config(page_title="Pixel Thread - Portal Profesional", layout="centered")
+db = init_firebase()
 
-# --- CONVERTIR LOGO A BASE64 PARA EL FONDO ---
-logo_path = "PIXEL THREAD W_Mesa de trabajo 1_2.jpg"
-logo_base64 = ""
-if os.path.exists(logo_path):
-    with open(logo_path, "rb") as f:
-        logo_base64 = base64.b64encode(f.read()).decode("utf-8")
+# ---------------------------------------------------------
+# 3. FUNCIONES DE BASE DE DATOS
+# ---------------------------------------------------------
+def guardar_logo_firebase(nuevo_logo):
+    # Guardamos en la colección "logos" usando el ID como documento
+    db.collection("logos").document(str(nuevo_logo["id"])).set(nuevo_logo)
 
-# --- ESTILOS CSS PERSONALIZADOS ---
-st.markdown(f"""
-    <style>
-    .stApp {{
-        background: linear-gradient(135deg, rgba(10, 15, 29, 0.93) 0%, rgba(17, 24, 39, 0.93) 50%, rgba(31, 17, 40, 0.93) 100%);
-        color: #e2e8f0;
-    }}
-    .stApp::before {{
-        content: ""; position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
-        width: 60vw; height: 60vw; max-width: 650px; max-height: 650px;
-        background-image: url("data:image/jpeg;base64,{logo_base64}");
-        background-size: contain; background-repeat: no-repeat; background-position: center;
-        opacity: 0.08; z-index: 0; pointer-events: none;
-    }}
-    /* ... (resto de tus estilos permanecen igual) ... */
-    </style>
-""", unsafe_allow_html=True)
+def obtener_logos_cliente(nombre_cliente):
+    # Consultamos documentos donde el campo "cliente" coincida
+    docs = db.collection("logos").where("cliente", "==", nombre_cliente).stream()
+    return [doc.to_dict() for doc in docs]
 
-# --- ARCHIVO DE PERSISTENCIA LOCAL (SIGUE FUNCIONANDO COMO RESPALDO) ---
-DB_FILE = "datos_pixel_thread.json"
+# ---------------------------------------------------------
+# 4. BARRA LATERAL
+# ---------------------------------------------------------
+st.sidebar.title("Pixel Thread 🧵")
+st.sidebar.subheader("🔒 Iniciar Sesión")
 
-def cargar_datos():
-    # Si quisieras traer datos de la conexión nueva, integrarías la lógica aquí
-    if os.path.exists(DB_FILE):
-        try:
-            with open(DB_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception:
-            return None
-    return None
+tipo_acceso = st.sidebar.radio("Tipo de Acceso", ["Cliente", "Panel Administrador"])
+nombre_usuario = st.sidebar.text_input("Ingresa tu Nombre de Usuario", value="Cliente A")
 
-def guardar_datos():
-    # Lógica de guardado existente
-    try:
-        # ... (tu lógica de limpieza de datos y guardado a JSON)
-        pass 
-    except Exception as e:
-        print(f"Error al guardar datos: {e}")
+if st.sidebar.button("Entrar a mi Portal"):
+    st.session_state["usuario_activo"] = nombre_usuario
+    st.session_state["tipo_acceso"] = tipo_acceso
 
-# ... (El resto de tu código continúa igual desde el st_autorefresh hasta el final)
+usuario_activo = st.session_state.get("usuario_activo", "Cliente A")
+st.sidebar.markdown("---")
+st.sidebar.info("💡 **Tarifa oficial:** 5.00 USD / 300.00 DOP por logo.")
+
+# ---------------------------------------------------------
+# 5. CONTENIDO PRINCIPAL
+# ---------------------------------------------------------
+st.title(f"Portal de Cliente: {usuario_activo}")
+
+divisa = st.radio("Selecciona tu moneda:", ["Dólares (USD - $)", "Pesos Dominicanos (DOP - RD$)"], horizontal=True)
+st.markdown("---")
+
+# ---------------------------------------------------------
+# 6. FORMULARIO: ENVIAR NUEVO LOGO
+# ---------------------------------------------------------
+with st.expander("➕ Enviar Nuevo Logo", expanded=True):
+    nombre_logo = st.text_input("1. Nombre del Logo / Proyecto")
+    archivos_subidos = st.file_uploader("2. Sube tu archivo", type=["png", "jpg", "pdf", "dst", "emb"], accept_multiple_files=False)
+    tipo_aplicacion = st.radio("3. Soporte del bordado:", ["Tela (Camisetas, Polos, etc.)", "Gorra"])
+
+    ubicacion_gorra, detalle_gorra = "N/A", "N/A"
+    if tipo_aplicacion == "Gorra":
+        col1, col2 = st.columns(2)
+        ubicacion_gorra = col1.selectbox("Ubicación:", ["Frente", "Lado Izquierdo", "Lado Derecho", "Atrás"])
+        detalle_gorra = col2.selectbox("Estructura:", ["Plana / Estructurada", "Curva / Soft", "3D / Relevante"])
+
+    comentario_cliente = st.text_area("4. Instrucciones especiales")
+
+    if st.button("🚀 ENVIAR LOGO A PIXEL THREAD"):
+        if nombre_logo:
+            img_bytes_guardar = None
+            if archivos_subidos:
+                img_bytes_guardar = base64.b64encode(archivos_subidos.getvalue()).decode("utf-8")
+
+            nuevo_logo = {
+                "id": int(datetime.now().timestamp()),
+                "cliente": usuario_activo,
+                "nombre": nombre_logo,
+                "precio_usd": 5.0,
+                "precio_dop": 300.0,
+                "estado": "Pendiente",
+                "pago": "Pendiente",
+                "tipo": tipo_aplicacion,
+                "ubicacion_gorra": ubicacion_gorra,
+                "detalle_gorra": detalle_gorra,
+                "comentario": comentario_cliente,
+                "archivo": archivos_subidos.name if archivos_subidos else "Sin archivo",
+                "imagen_bytes": img_bytes_guardar
+            }
+            guardar_logo_firebase(nuevo_logo)
+            st.success("¡Logo enviado exitosamente a Firebase!")
+            st.rerun()
+
+# ---------------------------------------------------------
+# 7. HISTORIAL
+# ---------------------------------------------------------
+st.header("📋 Mis Pedidos Registrados")
+pedidos = obtener_logos_cliente(usuario_activo)
+
+if pedidos:
+    for p in pedidos:
+        with st.container():
+            c1, c2, c3, c4 = st.columns([3, 2, 2, 2])
+            c1.subheader(p.get("nombre", "Sin Nombre"))
+            precio = p.get("precio_usd", 5.0) if "USD" in divisa else p.get("precio_dop", 300.0)
+            moneda = "USD" if "USD" in divisa else "DOP"
+            c2.markdown(f"**Precio:** {precio:.2f} {moneda}")
+            c3.markdown(f"**Estado:** {p.get('estado', 'Pendiente')}")
+            c4.markdown(f"**Pago:** {p.get('pago', 'Pendiente')}")
+            st.divider()
+else:
+    st.info("No tienes solicitudes guardadas en el sistema.")
