@@ -32,28 +32,44 @@ db = init_firebase()
 # 3. FUNCIONES DE BASE DE DATOS
 # ---------------------------------------------------------
 def guardar_logo_firebase(nuevo_logo):
-    # Guardamos en la colección "logos" usando el timestamp como ID
     db.collection("logos").document(str(nuevo_logo["id"])).set(nuevo_logo)
 
 def obtener_logos_cliente(nombre_cliente):
-    # Consulta a Firestore filtrando por el campo "cliente"
     docs = db.collection("logos").where("cliente", "==", nombre_cliente).stream()
     return [doc.to_dict() for doc in docs]
 
 # ---------------------------------------------------------
-# 4. BARRA LATERAL
+# 4. BARRA LATERAL (INICIO DE SESIÓN PERSISTENTE)
 # ---------------------------------------------------------
 st.sidebar.title("Pixel Thread 🧵")
 st.sidebar.subheader("🔒 Iniciar Sesión")
 
-tipo_acceso = st.sidebar.radio("Tipo de Acceso", ["Cliente", "Panel Administrador"])
-nombre_usuario = st.sidebar.text_input("Ingresa tu Nombre de Usuario", value="Cliente A")
+# Inicializamos el estado si no existe
+if "usuario_activo" not in st.session_state:
+    st.session_state["usuario_activo"] = "Cliente A"
+if "tipo_acceso" not in st.session_state:
+    st.session_state["tipo_acceso"] = "Cliente"
 
+# Inputs de la barra lateral
+tipo_acceso = st.sidebar.radio(
+    "Tipo de Acceso", 
+    ["Cliente", "Panel Administrador"], 
+    key="input_tipo"
+)
+nombre_usuario = st.sidebar.text_input(
+    "Ingresa tu Nombre de Usuario", 
+    value=st.session_state["usuario_activo"]
+)
+
+# Botón para actualizar el usuario
 if st.sidebar.button("Entrar a mi Portal"):
     st.session_state["usuario_activo"] = nombre_usuario
     st.session_state["tipo_acceso"] = tipo_acceso
+    st.rerun()
 
-usuario_activo = st.session_state.get("usuario_activo", "Cliente A")
+# Recuperamos el valor para usarlo en la app
+usuario_activo = st.session_state["usuario_activo"]
+
 st.sidebar.markdown("---")
 st.sidebar.info("💡 **Tarifa oficial:** 5.00 USD / 300.00 DOP por logo.")
 
